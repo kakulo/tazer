@@ -84,7 +84,7 @@ set(LIB_PATH "${CMAKE_BINARY_DIR}/src/client/libclient.so")
 
 #find_library(RT_LIB rt)
 
-SET(TAZER_INC_DIR ${CMAKE_SOURCE_DIR}/inc/tazer)
+SET(TAZER_INC_DIR ${CMAKE_SOURCE_DIR}/inc/tazer/client)
 #SET(TAZER_CACHE_INC_DIR ${TAZER_INC_DIR}/caches)
 #SET(TAZER_PREFETCH_INC_DIR ${TAZER_INC_DIR}/prefetchers)
 #target_include_directories(TAZeR PUBLIC ${TAZER_INC_DIR})

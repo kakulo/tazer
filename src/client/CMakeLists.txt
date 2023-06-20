@@ -1,7 +1,6 @@
-SET(TAZER_CLIENT_INC_DIR ${TAZER_INC_DIR}/client)
+SET(TAZER_CLIENT_INC_DIR ${TAZER_INC_DIR})
 set(CLIENT_HEADERS
     ${TAZER_CLIENT_INC_DIR}/TrackFile.h
-    ${TAZER_CLIENT_INC_DIR}/UrlDownload.h
     ${TAZER_CLIENT_INC_DIR}/AtomicHelper.h
     ${TAZER_CLIENT_INC_DIR}/FcntlReaderWriterLock.h
     ${TAZER_CLIENT_INC_DIR}/ThreadPool.h
@@ -22,15 +21,12 @@ set(CLIENT_HEADERS
     ${TAZER_CLIENT_INC_DIR}/FilelockCache.h
     ${TAZER_CLIENT_INC_DIR}/UnixIO.h
     ${TAZER_CLIENT_INC_DIR}/CacheTypes.h
-    ${TAZER_CLIENT_INC_DIR}/LocalFileCache.h
-    ${TAZER_CLIENT_INC_DIR}/UrlCache.h
     ${TAZER_CLIENT_INC_DIR}/Config.h
     ${TAZER_CLIENT_INC_DIR}/Loggable.h
     ${TAZER_CLIENT_INC_DIR}/PriorityThreadPool.h
     ${TAZER_CLIENT_INC_DIR}/Connection.h
     ${TAZER_CLIENT_INC_DIR}/MemoryCache.h
     ${TAZER_CLIENT_INC_DIR}/RSocketAdapter.h
-    ${TAZER_CLIENT_INC_DIR}/UrlFileCache.h
     ${TAZER_CLIENT_INC_DIR}/ConnectionPool.h
     ${TAZER_CLIENT_INC_DIR}/Message.h
     ${TAZER_CLIENT_INC_DIR}/ReaderWriterLock.h
@@ -49,28 +45,26 @@ set(CLIENT_FILES
     OutputFileInner.cpp
     OutputFile.cpp
     LocalFile.cpp
+    TrackFile.cpp
     TazerFileStream.cpp
     Lib.cpp
     PriorityThreadPool.cpp
-    Cache.cpp
     RSocketAdapter.cpp
     ThreadPool.cpp
-    CacheStats.cpp
     ReaderWriterLock.cpp
     Timer.cpp
     Connection.cpp
     Loggable.cpp
     Request.cpp
-    #UrlDownload.cpp
     ConnectionPool.cpp
     TazerFile.cpp
-    FileCacheRegister.cpp
     Prefetcher.cpp
     TazerFileDescriptor.cpp
 )
 
-add_library(client SHARED ${CLIENT_HEADERS} ${CLIENT_FILES})
-target_link_libraries(client ${RDMACM_LIB} ${RT_LIB} ${CURL_LIB} ${SSL_LIB} stdc++fs) 
-target_include_directories(client PUBLIC ${TAZER_INC_DIR} ${TAZER_CLIENT_INC_DIR} ${TAZER_CACHE_INC_DIR} ${TAZER_PREFETCH_INC_DIR})
+add_library(client SHARED ${CLIENT_FILES})
+#target_link_libraries(client ${RDMACM_LIB} ${RT_LIB} ${CURL_LIB} ${SSL_LIB} stdc++fs) 
+target_link_libraries(client stdc++fs) 
+target_include_directories(client PUBLIC ${TAZER_INC_DIR})
 install(TARGETS client LIBRARY DESTINATION lib)
  
