@@ -16,7 +16,7 @@
 //    may use, copy, modify, merge, publish, distribute, sublicense,
 //    and/or sell copies of the Software, and may permit others to do
 //    so, subject to the following conditions:
-//    
+//
 //    * Redistributions of source code must retain the above copyright
 //      notice, this list of conditions and the following disclaimers.
 //
@@ -69,65 +69,43 @@
 //                               for the
 //                  UNITED STATES DEPARTMENT OF ENERGY
 //                   under Contract DE-AC05-76RL01830
-// 
+//
 //*EndLicense****************************************************************
 
-#ifndef InputFile_H_
-#define InputFile_H_
+#ifndef NETWORKCACHE_H
+#define NETWORKCACHE_H
 #include "Cache.h"
 #include "ConnectionPool.h"
-#include "FileCacheRegister.h"
-#include "TazerFile.h"
 #include "PriorityThreadPool.h"
-#include "ReaderWriterLock.h"
-#include "Prefetcher.h"
-#include <map>
-#include <atomic>
-#include <mutex>
-#include <string>
-#include <unordered_set>
 
-class ScalableFileRegistry;
-extern std::map<std::string, std::map<int, std::atomic<int64_t> > > track_file_blk_r_stat;
-
-class InputFile : public TazerFile {
+class NetworkCache : public Cache {
   public:
-    InputFile(std::string name, std::string metaName, int fd, bool openFile = true);
-    ~InputFile();
+    NetworkCache(std::string cacheName, CacheType type, PriorityThreadPool<std::packaged_task<std::shared_future<Request *>()>> &txPool, PriorityThreadPool<std::packaged_task<Request *()>> &decompPool);
+    virtual ~NetworkCache();
 
-    static void cache_init(void);
+    bool writeBlock(Request *req);
 
-    void open();
-    void close();
-    uint64_t fileSize();
-    // uint64_t numBlks();
+    virtual void readBlock(Request *req, std::unordered_map<uint32_t, std::shared_future<std::shared_future<Request *>>> &reads, uint64_t priority);
 
-    ssize_t read(void *buf, size_t count, uint32_t index = 0);
-    ssize_t write(const void *buf, size_t count, uint32_t index = 0);
-    off_t seek(off_t offset, int whence, uint32_t index = 0);
-    int vfprintf(unsigned int pos, int count);
+    void setFileCompress(uint32_t index, bool compress);
+    void setFileConnectionPool(uint32_t index, ConnectionPool *nmconPool);
 
-    static void printHits();
-    static PriorityThreadPool<std::packaged_task<std::shared_future<Request*>()>>* _transferPool;
-    static PriorityThreadPool<std::packaged_task<Request*()>>* _decompressionPool;
+    void printStats();
 
-    static Cache *_cache;
-    static std::chrono::time_point<std::chrono::high_resolution_clock>*  _time_of_last_read;
+    static Cache *addNewNetworkCache(std::string cacheName, CacheType type, PriorityThreadPool<std::packaged_task<std::shared_future<Request *>()>> &txPool, PriorityThreadPool<std::packaged_task<Request *()>> &decompPool);
+    void addFile(uint32_t index, std::string filename, uint64_t blockSize, std::uint64_t fileSize);
+
   private:
-    uint64_t fileSizeFromServer();
-
-    bool trackRead(size_t count, uint32_t index, uint32_t startBlock, uint32_t endBlock);
-
-    uint64_t copyBlock(char *buf, char *blkBuf, uint32_t blk, uint32_t startBlock, uint32_t endBlock, uint32_t fpIndex, uint64_t count);
-
-    std::mutex _openCloseLock;
-    std::atomic<uint64_t> _fileSize;
-    uint32_t _numBlks;
-    uint32_t _regFileIndex;
-    Prefetcher *_prefetcher;
-  
-
-
+    virtual void cleanUpBlockData(uint8_t *data);
+    Request *decompress(Request *req, char *compBuf, uint32_t compBufSize, uint32_t blkBufSize, uint32_t blk);
+    // std::future<Request*> requestBlk(Connection *server, uint32_t blkStart, uint32_t blkEnd, uint32_t fileIndex, uint32_t priority);
+    std::future<Request *> requestBlk(Connection *server, Request *req, uint32_t priority, bool &success);
+    std::atomic_uint _outstanding;
+    std::unordered_map<uint32_t, bool> _compressMap;
+    std::unordered_map<uint32_t, ConnectionPool *> _conPoolMap;
+    PriorityThreadPool<std::packaged_task<std::shared_future<Request *>()>> &_transferPool;
+    PriorityThreadPool<std::packaged_task<Request *()>> &_decompPool;
+    ReaderWriterLock *_lock;
 };
 
-#endif /* InputFile_H_ */
+#endif /* NETWORKCACHE_H */

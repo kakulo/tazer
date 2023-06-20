@@ -1,5 +1,1 @@
-add_subdirectory (common)
-add_subdirectory (caches)
-add_subdirectory (prefetchers)
 add_subdirectory (client)
-add_subdirectory (server)

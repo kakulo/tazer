@@ -72,62 +72,74 @@
 // 
 //*EndLicense****************************************************************
 
-#ifndef InputFile_H_
-#define InputFile_H_
-#include "Cache.h"
-#include "ConnectionPool.h"
-#include "FileCacheRegister.h"
-#include "TazerFile.h"
-#include "PriorityThreadPool.h"
-#include "ReaderWriterLock.h"
-#include "Prefetcher.h"
-#include <map>
+#ifndef FileCache_H
+#define FileCache_H
+#include "BoundedCache.h"
 #include <atomic>
-#include <mutex>
-#include <string>
+#include <future>
+#include <map>
+#include <unordered_map>
 #include <unordered_set>
 
-class ScalableFileRegistry;
-extern std::map<std::string, std::map<int, std::atomic<int64_t> > > track_file_blk_r_stat;
+#define FILECACHENAME "fileCache"
 
-class InputFile : public TazerFile {
+class FileCache : public BoundedCache<MultiReaderWriterLock> {
   public:
-    InputFile(std::string name, std::string metaName, int fd, bool openFile = true);
-    ~InputFile();
+    FileCache(std::string cacheName, CacheType type, uint64_t cacheSize, uint64_t blockSize, uint32_t associativity, std::string cachePath);
+    ~FileCache();
+    static Cache *addFileCache(std::string cacheName, CacheType type, uint64_t cacheSize, uint64_t blockSize, uint32_t associativity, std::string cachePath);
 
-    static void cache_init(void);
-
-    void open();
-    void close();
-    uint64_t fileSize();
-    // uint64_t numBlks();
-
-    ssize_t read(void *buf, size_t count, uint32_t index = 0);
-    ssize_t write(const void *buf, size_t count, uint32_t index = 0);
-    off_t seek(off_t offset, int whence, uint32_t index = 0);
-    int vfprintf(unsigned int pos, int count);
-
-    static void printHits();
-    static PriorityThreadPool<std::packaged_task<std::shared_future<Request*>()>>* _transferPool;
-    static PriorityThreadPool<std::packaged_task<Request*()>>* _decompressionPool;
-
-    static Cache *_cache;
-    static std::chrono::time_point<std::chrono::high_resolution_clock>*  _time_of_last_read;
   private:
-    uint64_t fileSizeFromServer();
+    struct MemBlockEntry : BlockEntry {
+        std::atomic<uint32_t> activeCnt;
+        void init(BoundedCache* c,uint32_t entryId){
+          //BlockEntry::init(c,entryId);
+                    //update
+          BlockEntry::init(c);
+	  std::atomic_init(&activeCnt, (uint32_t)0);
+        }
+    };
 
-    bool trackRead(size_t count, uint32_t index, uint32_t startBlock, uint32_t endBlock);
+    void readFromFile(int fd, uint64_t size, uint8_t *buff);
+    void writeToFile(int fd, uint64_t size, uint8_t *buff);
 
-    uint64_t copyBlock(char *buf, char *blkBuf, uint32_t blk, uint32_t startBlock, uint32_t endBlock, uint32_t fpIndex, uint64_t count);
+    void preadFromFile(int fd, uint64_t size, uint8_t *buff, uint64_t offset);
+    void pwriteToFile(int fd, uint64_t size, uint8_t *buff, uint64_t offset);
+    
+    virtual void blockSet(BlockEntry* blk,  uint32_t fileIndex, uint32_t blockIndex, uint8_t byte, CacheType type, int32_t prefetch, int activeUpdate,Request* req);
+    virtual bool blockAvailable(unsigned int index, unsigned int fileIndex, bool checkFs = false, uint32_t cnt = 0, CacheType *origCache = NULL);
 
-    std::mutex _openCloseLock;
-    std::atomic<uint64_t> _fileSize;
-    uint32_t _numBlks;
-    uint32_t _regFileIndex;
-    Prefetcher *_prefetcher;
-  
+    virtual uint8_t *getBlockData(unsigned int blockIndex);
+    virtual void setBlockData(uint8_t *data, unsigned int blockIndex, uint64_t size);
+    virtual BlockEntry* getBlockEntry(uint32_t blockIndex,  Request* req);
+    //virtual std::vector<BlockEntry*> readBin(uint32_t binIndex);
+    //update
+    std::vector<std::shared_ptr<BlockEntry>> readBin(uint32_t binIndex);
 
+    virtual std::string blockEntryStr(BlockEntry *entry);
 
+    virtual int incBlkCnt(BlockEntry * entry, Request* req);
+    virtual int decBlkCnt(BlockEntry * entry, Request* req);
+    virtual bool anyUsers(BlockEntry * entry, Request* req);
+
+    virtual void cleanUpBlockData(uint8_t *data);
+    
+
+    MemBlockEntry *_blkIndex; //keep the entry meta info in shared memory, but the actual data on disk.
+
+    uint32_t _pid;
+    std::string _cachePath;
+    std::string _indexPath;
+    // std::atomic_uint *_fullFlag;
+    int _blocksfd; //the raw data file
+    // int _blkIndexfd; //
+
+    unixopen_t _open;
+    unixclose_t _close;
+    unixread_t _read;
+    unixwrite_t _write;
+    unixlseek_t _lseek;
+    unixfsync_t _fsync;
 };
 
-#endif /* InputFile_H_ */
+#endif /* BUSTBUFFERCACHE_H */

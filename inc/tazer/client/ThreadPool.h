@@ -72,62 +72,54 @@
 // 
 //*EndLicense****************************************************************
 
-#ifndef InputFile_H_
-#define InputFile_H_
-#include "Cache.h"
-#include "ConnectionPool.h"
-#include "FileCacheRegister.h"
-#include "TazerFile.h"
-#include "PriorityThreadPool.h"
-#include "ReaderWriterLock.h"
-#include "Prefetcher.h"
-#include <map>
+#ifndef ThreadPool_H
+#define ThreadPool_H
 #include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <functional>
 #include <mutex>
-#include <string>
-#include <unordered_set>
+#include <thread>
+#include <vector>
+#include <future>
+#include <unordered_map>
 
-class ScalableFileRegistry;
-extern std::map<std::string, std::map<int, std::atomic<int64_t> > > track_file_blk_r_stat;
-
-class InputFile : public TazerFile {
+template <class T>
+class ThreadPool {
   public:
-    InputFile(std::string name, std::string metaName, int fd, bool openFile = true);
-    ~InputFile();
+    ThreadPool(unsigned int maxThreads);
+    ThreadPool(unsigned int maxThreads,std::string name);
+    ~ThreadPool();
 
-    static void cache_init(void);
+    unsigned int initiate();
+    bool terminate(bool force = false);
+    void wait();
 
-    void open();
-    void close();
-    uint64_t fileSize();
-    // uint64_t numBlks();
+    unsigned int addThreads(unsigned int numThreads);
+    void addTask(T f);
+    bool addThreadWithTask(T f);
 
-    ssize_t read(void *buf, size_t count, uint32_t index = 0);
-    ssize_t write(const void *buf, size_t count, uint32_t index = 0);
-    off_t seek(off_t offset, int whence, uint32_t index = 0);
-    int vfprintf(unsigned int pos, int count);
+    unsigned int getMaxThreads();
+    int numTasks();
 
-    static void printHits();
-    static PriorityThreadPool<std::packaged_task<std::shared_future<Request*>()>>* _transferPool;
-    static PriorityThreadPool<std::packaged_task<Request*()>>* _decompressionPool;
-
-    static Cache *_cache;
-    static std::chrono::time_point<std::chrono::high_resolution_clock>*  _time_of_last_read;
   private:
-    uint64_t fileSizeFromServer();
+    unsigned int _maxThreads;
+    unsigned int _users;
 
-    bool trackRead(size_t count, uint32_t index, uint32_t startBlock, uint32_t endBlock);
+    std::atomic_bool _alive;
+    std::atomic_uint _currentThreads;
 
-    uint64_t copyBlock(char *buf, char *blkBuf, uint32_t blk, uint32_t startBlock, uint32_t endBlock, uint32_t fpIndex, uint64_t count);
+    std::mutex _tMutex;
+    std::vector<std::thread> _threads;
+    std::unordered_map<std::thread::id, uint64_t> _idleTime;
+    std::unordered_map<std::thread::id, uint64_t> _activeTime;
 
-    std::mutex _openCloseLock;
-    std::atomic<uint64_t> _fileSize;
-    uint32_t _numBlks;
-    uint32_t _regFileIndex;
-    Prefetcher *_prefetcher;
-  
+    std::mutex _qMutex;
+    std::deque<T> _q;
+    std::condition_variable _cv;
 
-
+    void workLoop();
+    std::string _name;
 };
 
-#endif /* InputFile_H_ */
+#endif /* ThreadPool_H */

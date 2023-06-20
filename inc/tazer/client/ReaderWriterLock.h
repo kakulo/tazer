@@ -72,62 +72,66 @@
 // 
 //*EndLicense****************************************************************
 
-#ifndef InputFile_H_
-#define InputFile_H_
-#include "Cache.h"
-#include "ConnectionPool.h"
-#include "FileCacheRegister.h"
-#include "TazerFile.h"
-#include "PriorityThreadPool.h"
-#include "ReaderWriterLock.h"
-#include "Prefetcher.h"
-#include <map>
+#ifndef READERWRITERLOCK_H
+#define READERWRITERLOCK_H
+
+// #include "Request.h"
+class Request;
 #include <atomic>
-#include <mutex>
-#include <string>
-#include <unordered_set>
+#include <thread>
 
-class ScalableFileRegistry;
-extern std::map<std::string, std::map<int, std::atomic<int64_t> > > track_file_blk_r_stat;
-
-class InputFile : public TazerFile {
+class ReaderWriterLock {
   public:
-    InputFile(std::string name, std::string metaName, int fd, bool openFile = true);
-    ~InputFile();
+    unsigned int readerLock();
+    unsigned int readerUnlock();
 
-    static void cache_init(void);
+    void writerLock();
+    void fairWriterLock();
+    void writerUnlock();
+    void fairWriterUnlock();
 
-    void open();
-    void close();
-    uint64_t fileSize();
-    // uint64_t numBlks();
+    bool tryWriterLock();
+    bool cowardlyTryWriterLock();
+    bool tryReaderLock();
+    bool cowardlyUpdgradeWriterLock();
 
-    ssize_t read(void *buf, size_t count, uint32_t index = 0);
-    ssize_t write(const void *buf, size_t count, uint32_t index = 0);
-    off_t seek(off_t offset, int whence, uint32_t index = 0);
-    int vfprintf(unsigned int pos, int count);
+    void print();
 
-    static void printHits();
-    static PriorityThreadPool<std::packaged_task<std::shared_future<Request*>()>>* _transferPool;
-    static PriorityThreadPool<std::packaged_task<Request*()>>* _decompressionPool;
+    ReaderWriterLock();
+    ~ReaderWriterLock();
 
-    static Cache *_cache;
-    static std::chrono::time_point<std::chrono::high_resolution_clock>*  _time_of_last_read;
   private:
-    uint64_t fileSizeFromServer();
-
-    bool trackRead(size_t count, uint32_t index, uint32_t startBlock, uint32_t endBlock);
-
-    uint64_t copyBlock(char *buf, char *blkBuf, uint32_t blk, uint32_t startBlock, uint32_t endBlock, uint32_t fpIndex, uint64_t count);
-
-    std::mutex _openCloseLock;
-    std::atomic<uint64_t> _fileSize;
-    uint32_t _numBlks;
-    uint32_t _regFileIndex;
-    Prefetcher *_prefetcher;
-  
-
-
+    std::atomic_uint _readers;
+    std::atomic_uint _writers;
+    std::atomic<uint64_t> _cnt;
+    std::atomic<uint64_t> _cur;
 };
 
-#endif /* InputFile_H_ */
+class MultiReaderWriterLock {
+  public:
+    void readerLock(uint64_t entry, Request* req = NULL);
+    void readerUnlock(uint64_t entry, Request* req = NULL);
+
+    void writerLock(uint64_t entry, Request* req = NULL);
+    void fairWriterLock(uint64_t entry);
+    void writerUnlock(uint64_t entry, Request* req = NULL);
+    void fairWriterUnlock(uint64_t entry);
+    int lockAvail(uint64_t entry, Request* req = NULL);
+
+    MultiReaderWriterLock(uint32_t numEntries);
+    MultiReaderWriterLock(uint32_t numEntries, uint8_t *dataAddr, bool init = false);
+    ~MultiReaderWriterLock();
+    static uint64_t getDataSize(uint64_t numEntries) {
+        return (numEntries * sizeof(std::atomic<uint16_t>)) * 4;
+    }
+
+  private:
+    uint32_t _numEntries;
+    std::atomic<uint16_t> *_readers;
+    std::atomic<uint16_t> *_writers;
+    std::atomic<uint16_t> *_cnt;
+    std::atomic<uint16_t> *_cur;
+    uint8_t *_dataAddr;
+};
+
+#endif /* READERWRITERLOCK_H */

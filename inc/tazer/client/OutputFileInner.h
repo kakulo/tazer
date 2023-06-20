@@ -72,62 +72,65 @@
 // 
 //*EndLicense****************************************************************
 
-#ifndef InputFile_H_
-#define InputFile_H_
-#include "Cache.h"
-#include "ConnectionPool.h"
-#include "FileCacheRegister.h"
-#include "TazerFile.h"
-#include "PriorityThreadPool.h"
-#include "ReaderWriterLock.h"
-#include "Prefetcher.h"
-#include <map>
+#ifndef OutputFileInner_H_
+#define OutputFileInner_H_
 #include <atomic>
 #include <mutex>
 #include <string>
-#include <unordered_set>
+#include <map>
 
-class ScalableFileRegistry;
-extern std::map<std::string, std::map<int, std::atomic<int64_t> > > track_file_blk_r_stat;
+#include "TazerFile.h"
+#include "PriorityThreadPool.h"
+#include "ThreadPool.h"
+#include "OutputFile.h"
 
-class InputFile : public TazerFile {
+extern std::map<std::string, std::map<int, std::atomic<int64_t> > > track_file_blk_w_stat;
+class OutputFileInner : public TazerFile {
   public:
-    InputFile(std::string name, std::string metaName, int fd, bool openFile = true);
-    ~InputFile();
-
-    static void cache_init(void);
+    OutputFileInner(std::string fileName, std::string metaName, int fd);
+    ~OutputFileInner();
 
     void open();
     void close();
-    uint64_t fileSize();
-    // uint64_t numBlks();
 
-    ssize_t read(void *buf, size_t count, uint32_t index = 0);
-    ssize_t write(const void *buf, size_t count, uint32_t index = 0);
-    off_t seek(off_t offset, int whence, uint32_t index = 0);
+    ssize_t read(void *buf, size_t count, uint32_t index);
+    ssize_t write(const void *buf, size_t count, uint32_t index);
     int vfprintf(unsigned int pos, int count);
 
-    static void printHits();
-    static PriorityThreadPool<std::packaged_task<std::shared_future<Request*>()>>* _transferPool;
-    static PriorityThreadPool<std::packaged_task<Request*()>>* _decompressionPool;
+    off_t seek(off_t offset, int whence, uint32_t index);
+    uint64_t fileSize();
 
-    static Cache *_cache;
-    static std::chrono::time_point<std::chrono::high_resolution_clock>*  _time_of_last_read;
+    //static PriorityThreadPool<std::function<void()>>* _transferPool;
+    //static ThreadPool<std::function<void()>>* _decompressionPool;
+
   private:
+    bool openFileOnServer();
+    bool closeFileOnServer();
     uint64_t fileSizeFromServer();
 
-    bool trackRead(size_t count, uint32_t index, uint32_t startBlock, uint32_t endBlock);
+    uint64_t compress(char **buffer, uint64_t offset, uint64_t size);
+    void addTransferTask(char *buf, uint64_t size, uint64_t compSize, uint64_t fp, uint32_t seqNum);
+    void addCompressTask(char *buf, uint64_t size, uint64_t fp, uint32_t seqNum);
 
-    uint64_t copyBlock(char *buf, char *blkBuf, uint32_t blk, uint32_t startBlock, uint32_t endBlock, uint32_t fpIndex, uint64_t count);
+    bool trackWrites(size_t count, uint32_t index, uint32_t startBlock, uint32_t endBlock);
+    //    void compress(CompressionWorkArgs task);
 
+    int _compLevel;
+    uint64_t _fileSize;
+    uint32_t _messageOffset; //size of header -- depends on the file name
+    std::atomic_uint _seqNum;
+    std::atomic_uint _sendNum;
     std::mutex _openCloseLock;
-    std::atomic<uint64_t> _fileSize;
-    uint32_t _numBlks;
-    uint32_t _regFileIndex;
-    Prefetcher *_prefetcher;
-  
 
+    char *_buffer;
+    uint64_t _bufferIndex;
+    uint64_t _bufferFp;
+    uint64_t _bufferCnt;
 
+    uint64_t _totalCnt;
+    std::mutex _bufferLock;
+
+    
 };
 
-#endif /* InputFile_H_ */
+#endif /* OutputFileInner_H_ */

@@ -72,62 +72,57 @@
 // 
 //*EndLicense****************************************************************
 
-#ifndef InputFile_H_
-#define InputFile_H_
-#include "Cache.h"
-#include "ConnectionPool.h"
-#include "FileCacheRegister.h"
-#include "TazerFile.h"
-#include "PriorityThreadPool.h"
-#include "ReaderWriterLock.h"
-#include "Prefetcher.h"
-#include <map>
-#include <atomic>
-#include <mutex>
-#include <string>
-#include <unordered_set>
+//cache IDS
 
-class ScalableFileRegistry;
-extern std::map<std::string, std::map<int, std::atomic<int64_t> > > track_file_blk_r_stat;
-
-class InputFile : public TazerFile {
-  public:
-    InputFile(std::string name, std::string metaName, int fd, bool openFile = true);
-    ~InputFile();
-
-    static void cache_init(void);
-
-    void open();
-    void close();
-    uint64_t fileSize();
-    // uint64_t numBlks();
-
-    ssize_t read(void *buf, size_t count, uint32_t index = 0);
-    ssize_t write(const void *buf, size_t count, uint32_t index = 0);
-    off_t seek(off_t offset, int whence, uint32_t index = 0);
-    int vfprintf(unsigned int pos, int count);
-
-    static void printHits();
-    static PriorityThreadPool<std::packaged_task<std::shared_future<Request*>()>>* _transferPool;
-    static PriorityThreadPool<std::packaged_task<Request*()>>* _decompressionPool;
-
-    static Cache *_cache;
-    static std::chrono::time_point<std::chrono::high_resolution_clock>*  _time_of_last_read;
-  private:
-    uint64_t fileSizeFromServer();
-
-    bool trackRead(size_t count, uint32_t index, uint32_t startBlock, uint32_t endBlock);
-
-    uint64_t copyBlock(char *buf, char *blkBuf, uint32_t blk, uint32_t startBlock, uint32_t endBlock, uint32_t fpIndex, uint64_t count);
-
-    std::mutex _openCloseLock;
-    std::atomic<uint64_t> _fileSize;
-    uint32_t _numBlks;
-    uint32_t _regFileIndex;
-    Prefetcher *_prefetcher;
-  
-
-
+#ifndef CACHETYPES_H_
+#define CACHETYPES_H_
+enum CacheType{
+    empty,
+    base,
+    privateMemory,
+    sharedMemory,
+    burstBuffer,
+    nodeFile,
+    boundedGlobalFile,
+    globalFileLock,
+    globalFcntl,
+    network,
+    local,
+    urlCache,
+    scalable
 };
 
-#endif /* InputFile_H_ */
+static inline std::string cacheTypeName(CacheType type){
+    switch (type) {
+        case CacheType::empty:
+            return "empty";
+        case CacheType::base:
+            return "base";
+        case CacheType::privateMemory:
+            return "privateMemory";
+        case CacheType::sharedMemory:
+            return "sharedMemory";
+        case CacheType::burstBuffer:
+            return "burstBuffer";
+        case CacheType::nodeFile:
+            return "nodeFile";
+        case CacheType::boundedGlobalFile:
+            return "boundedGlobalFile";
+        case CacheType::globalFileLock:
+            return "globalFileLock";
+        case CacheType::globalFcntl:
+            return "globalFcntl";
+        case CacheType::network:
+            return "network";
+        case CacheType::local:
+            return "local";
+        case CacheType::urlCache:
+            return "urlCache";
+        case CacheType::scalable:
+            return "scalable";
+        default:
+            return "unknown cache type";
+    }
+}
+
+#endif

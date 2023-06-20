@@ -1,4 +1,4 @@
-// -*-Mode: C++;-*- // technically C99
+// -*-Mode: C++;-*-
 
 //*BeginLicense**************************************************************
 //
@@ -72,62 +72,77 @@
 // 
 //*EndLicense****************************************************************
 
-#ifndef InputFile_H_
-#define InputFile_H_
+
 #include "Cache.h"
-#include "ConnectionPool.h"
-#include "FileCacheRegister.h"
-#include "TazerFile.h"
-#include "PriorityThreadPool.h"
-#include "ReaderWriterLock.h"
-#include "Prefetcher.h"
-#include <map>
-#include <atomic>
-#include <mutex>
-#include <string>
-#include <unordered_set>
+#include "Request.h"
+#include "Loggable.h"
+#include "Timer.h"
 
-class ScalableFileRegistry;
-extern std::map<std::string, std::map<int, std::atomic<int64_t> > > track_file_blk_r_stat;
+std::atomic<uint64_t> Request::ID_CNT(0);
+std::atomic<uint64_t> Request::RET_ID_CNT(0);
 
-class InputFile : public TazerFile {
-  public:
-    InputFile(std::string name, std::string metaName, int fd, bool openFile = true);
-    ~InputFile();
+RequestTrace Request::trace( std::string tag){
+    return trace(true,tag);
+}
+RequestTrace Request::trace(bool trigger, std::string tag){
+    if (trigger && globalTrigger){
+        return RequestTrace(&ss,true) << "[" << id << " " << Timer::getCurrentTime()<<"] "<<tag<<" --";
+    }
+    else{
+        return RequestTrace(&ss,false);
+    }    
+}
 
-    static void cache_init(void);
+void Request::flushTrace(){
+    ss << std::endl;
+    std::cout << ss.str();
+}
 
-    void open();
-    void close();
-    uint64_t fileSize();
-    // uint64_t numBlks();
+Request::~Request(){
+    Request::RET_ID_CNT.fetch_add(1);
+    // Loggable::debug()<<"request-- deleting req: "<<id <<"("<<Request::ID_CNT.load()<<", "<<Request::RET_ID_CNT.load()<<")"<<std::endl;
+    originating->cleanUpBlockData(data);
+    if (printTrace){
+        Loggable::log()<<str();
+    }
+}
 
-    ssize_t read(void *buf, size_t count, uint32_t index = 0);
-    ssize_t write(const void *buf, size_t count, uint32_t index = 0);
-    off_t seek(off_t offset, int whence, uint32_t index = 0);
-    int vfprintf(unsigned int pos, int count);
+std::string Request::str(){
+    std::stringstream tss;
+    tss<<"Req ["<<id<<"]"<<std::endl
+    <<"orignal cache: "<<originating->name()<<std::endl
+    <<"blk: " <<blkIndex<<std::endl
+    <<"file: "<<fileIndex<<std::endl
+    <<"size: "<<size<<std::endl
+    <<"time: "<<(double)time/ 1000000000.0<<std::endl
+    <<"retry time: "<<(double)retryTime/ 1000000000.0<<std::endl
+    <<"waitingCache: "<<waitingCache <<std::endl
+    <<"Reserved Map: [";
+    for (auto vals : reservedMap){
+        tss<<vals.first->name()<<" : "<<(int)vals.second<<", ";
+    }
+    tss<<"]"<<std::endl
+    <<" index Map: [";
+    for (auto vals : indexMap){
+        tss<<vals.first->name()<<" : "<<(int)vals.second<<", ";
+    }
+    tss<<"]"<<std::endl
+    <<"blkindex Map: [";
+    for (auto vals : blkIndexMap){
+        tss<<vals.first->name()<<" : "<<(int)vals.second<<", ";
+    }
+    tss<<"]"<<std::endl
+    <<" fileindex Map: [";
+    for (auto vals : fileIndexMap){
+        tss<<vals.first->name()<<" : "<<(int)vals.second<<", ";
+    }
+    tss<<"]"<<std::endl
+    <<" status Map: [";
+    for (auto vals : statusMap){
+        tss<<vals.first->name()<<" : "<<(int)vals.second<<", ";
+    }
+    tss<<"]"<<std::endl;
+    tss<<ss.str()<<std::endl;;
+    return tss.str();
 
-    static void printHits();
-    static PriorityThreadPool<std::packaged_task<std::shared_future<Request*>()>>* _transferPool;
-    static PriorityThreadPool<std::packaged_task<Request*()>>* _decompressionPool;
-
-    static Cache *_cache;
-    static std::chrono::time_point<std::chrono::high_resolution_clock>*  _time_of_last_read;
-  private:
-    uint64_t fileSizeFromServer();
-
-    bool trackRead(size_t count, uint32_t index, uint32_t startBlock, uint32_t endBlock);
-
-    uint64_t copyBlock(char *buf, char *blkBuf, uint32_t blk, uint32_t startBlock, uint32_t endBlock, uint32_t fpIndex, uint64_t count);
-
-    std::mutex _openCloseLock;
-    std::atomic<uint64_t> _fileSize;
-    uint32_t _numBlks;
-    uint32_t _regFileIndex;
-    Prefetcher *_prefetcher;
-  
-
-
-};
-
-#endif /* InputFile_H_ */
+}

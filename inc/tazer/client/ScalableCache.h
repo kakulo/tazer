@@ -72,62 +72,87 @@
 // 
 //*EndLicense****************************************************************
 
-#ifndef InputFile_H_
-#define InputFile_H_
+#ifndef SCALABLECACHE_H
+#define SCALABLECACHE_H
 #include "Cache.h"
-#include "ConnectionPool.h"
-#include "FileCacheRegister.h"
-#include "TazerFile.h"
-#include "PriorityThreadPool.h"
+#include "Loggable.h"
+#include "Trackable.h"
 #include "ReaderWriterLock.h"
-#include "Prefetcher.h"
+#include "ScalableMetaData.h"
+#include "ScalableAllocator.h"
 #include <map>
-#include <atomic>
-#include <mutex>
-#include <string>
-#include <unordered_set>
 
-class ScalableFileRegistry;
-extern std::map<std::string, std::map<int, std::atomic<int64_t> > > track_file_blk_r_stat;
+#define SCALABLECACHENAME "scalable"
 
-class InputFile : public TazerFile {
+class ScalableCache : public Cache {
   public:
-    InputFile(std::string name, std::string metaName, int fd, bool openFile = true);
-    ~InputFile();
+    ScalableCache(std::string cacheName, CacheType type, uint64_t blockSize, uint64_t maxCacheSize);
+    virtual ~ScalableCache();
+    
+    static Cache* addScalableCache(std::string cacheName, CacheType type, uint64_t blockSize, uint64_t maxCacheSize);
 
-    static void cache_init(void);
+    virtual bool writeBlock(Request *req);
+    virtual void readBlock(Request *req, std::unordered_map<uint32_t, std::shared_future<std::shared_future<Request *>>> &reads, uint64_t priority);
+    
+    virtual void addFile(uint32_t fileIndex, std::string filename, uint64_t blockSize, std::uint64_t fileSize);
+    virtual void closeFile(uint32_t fileIndex);
 
-    void open();
-    void close();
-    uint64_t fileSize();
-    // uint64_t numBlks();
+    //JS: Hueristics for replacement
+    virtual ScalableMetaData * oldestFile(uint32_t &oldestFileIndex);
+    ScalableMetaData * findVictim(uint32_t allocateForFileIndex, uint32_t &sourceFileIndex, bool mustSucceed=false);
+    ScalableMetaData * randomFile(uint32_t &sourceFileIndex);
+    ScalableMetaData * largestFile(uint32_t &largestFileIndex);
+    void updateRanks (uint32_t allocateForFileIndex, double& allocateForFileRank); 
+    
+    //JS: These hueristics are built mainly for scalable cache fallback use.  They walk through all files/blocks
+    //looking for blocks.
+    uint8_t * findBlockFromCachedUMB(uint32_t allocateForFileIndex, uint32_t &sourceFileIndex, uint64_t &sourceBlockIndex, double allocateForFileRank);
+    uint8_t * findBlockFromOldestFile(uint32_t allocateForFileIndex, uint32_t &sourceFileIndex, uint64_t &sourceBlockIndex);
 
-    ssize_t read(void *buf, size_t count, uint32_t index = 0);
-    ssize_t write(const void *buf, size_t count, uint32_t index = 0);
-    off_t seek(off_t offset, int whence, uint32_t index = 0);
-    int vfprintf(unsigned int pos, int count);
-
-    static void printHits();
-    static PriorityThreadPool<std::packaged_task<std::shared_future<Request*>()>>* _transferPool;
-    static PriorityThreadPool<std::packaged_task<Request*()>>* _decompressionPool;
-
-    static Cache *_cache;
-    static std::chrono::time_point<std::chrono::high_resolution_clock>*  _time_of_last_read;
-  private:
-    uint64_t fileSizeFromServer();
-
-    bool trackRead(size_t count, uint32_t index, uint32_t startBlock, uint32_t endBlock);
-
-    uint64_t copyBlock(char *buf, char *blkBuf, uint32_t blk, uint32_t startBlock, uint32_t endBlock, uint32_t fpIndex, uint64_t count);
-
-    std::mutex _openCloseLock;
-    std::atomic<uint64_t> _fileSize;
-    uint32_t _numBlks;
-    uint32_t _regFileIndex;
-    Prefetcher *_prefetcher;
+    //JS: For tracking
+    void trackBlockEviction(uint32_t fileIndex, uint64_t blockIndex);
+    void trackPattern(uint32_t fileIndex, std::string pattern);
   
+    //JS: This is so we can let others piggyback off our metrics.
+    //JS: I guess it is not that bad to just return vectors...
+    //https://stackoverflow.com/questions/15704565/efficient-way-to-return-a-stdvector-in-c
+    std::vector<std::tuple<uint32_t, double>> getLastUMB(Cache * cache);
+    void setUMBCache(Cache * cache);
+
+  protected:
+    ReaderWriterLock *_cacheLock;
+    std::unordered_map<uint32_t, ScalableMetaData*> _metaMap;
+    uint64_t _blockSize;
+    uint64_t _numBlocks;
+    TazerAllocator * _allocator;
+    
+    //JS: This is just temp for checking which files had blocks evicted
+    Histogram evictHisto;
+
+    //JS: For Nathan
+    std::atomic<uint64_t> access;
+    std::atomic<uint64_t> misses;
+    uint64_t startTimeStamp;
+
+    //JS: This is to make sure there will exist a block that is not requested
+    std::atomic<uint64_t> oustandingBlocksRequested;
+    std::atomic<uint64_t> maxOutstandingBlocks;
+    std::atomic<uint64_t> maxBlocksInUse;
 
 
+  private:
+    uint8_t * getBlockData(uint32_t fileIndex, uint64_t blockIndex, uint64_t fileOffset);
+    uint8_t * getBlockDataOrReserve(uint32_t fileIndex, uint64_t blockIndex, uint64_t fileOffset, bool &reserve, bool &full);
+    void setBlock(uint32_t fileIndex, uint64_t blockIndex, uint8_t * data, uint64_t dataSize, bool writeOptional);
+    void checkMaxBlockInUse(std::string msg, bool die);
+    void checkMaxInFlightRequests(uint64_t index);
+
+    //JS: Metric piggybacking
+    ReaderWriterLock * _lastVictimFileIndexLock;
+    std::vector<std::tuple<uint32_t, double>> _UMBList;
+    std::unordered_map<Cache*, bool> _UMBDirty;
+
+    std::once_flag first_miss;
 };
 
-#endif /* InputFile_H_ */
+#endif // SCALABLECACHE_H

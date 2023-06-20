@@ -72,62 +72,136 @@
 // 
 //*EndLicense****************************************************************
 
-#ifndef InputFile_H_
-#define InputFile_H_
-#include "Cache.h"
-#include "ConnectionPool.h"
-#include "FileCacheRegister.h"
-#include "TazerFile.h"
-#include "PriorityThreadPool.h"
+#ifndef TRACKABLE_H
+#define TRACKABLE_H
+
 #include "ReaderWriterLock.h"
-#include "Prefetcher.h"
-#include <map>
+#include <algorithm>
 #include <atomic>
-#include <mutex>
-#include <string>
-#include <unordered_set>
+#include <functional>
+#include <typeinfo>
+#include <unordered_map>
 
-class ScalableFileRegistry;
-extern std::map<std::string, std::map<int, std::atomic<int64_t> > > track_file_blk_r_stat;
-
-class InputFile : public TazerFile {
+template <class Key, class Value>
+class Trackable {
   public:
-    InputFile(std::string name, std::string metaName, int fd, bool openFile = true);
-    ~InputFile();
+    int id() {
+        return _id;
+    }
 
-    static void cache_init(void);
+  static auto begin() {
+    auto _iter =  _active.begin();
+    return _iter;
+  }
+  static auto end() {return _active.end();}
+   static auto next(auto _iter){ 
+   std::advance(_iter, 1);
+   return _iter;
+  }
 
-    void open();
-    void close();
-    uint64_t fileSize();
-    // uint64_t numBlks();
+  protected:
+    Trackable() : _id(_total.fetch_add(1)),
+                  _users(0) {
+    }
 
-    ssize_t read(void *buf, size_t count, uint32_t index = 0);
-    ssize_t write(const void *buf, size_t count, uint32_t index = 0);
-    off_t seek(off_t offset, int whence, uint32_t index = 0);
-    int vfprintf(unsigned int pos, int count);
+    ~Trackable() {}
 
-    static void printHits();
-    static PriorityThreadPool<std::packaged_task<std::shared_future<Request*>()>>* _transferPool;
-    static PriorityThreadPool<std::packaged_task<Request*()>>* _decompressionPool;
+    void incUsers() {
+        _users.fetch_add(1);
+    }
 
-    static Cache *_cache;
-    static std::chrono::time_point<std::chrono::high_resolution_clock>*  _time_of_last_read;
-  private:
-    uint64_t fileSizeFromServer();
+    bool decUsers(unsigned int dec) {
+        return (1 == _users.fetch_sub(dec));
+    }
 
-    bool trackRead(size_t count, uint32_t index, uint32_t startBlock, uint32_t endBlock);
+    static Value AddTrackable(Key k, std::function<Value(void)> createNew, std::function<void(Value)> reuseOld, bool &created) {
+        Value ret = NULL;
+        _activeMutex.writerLock();
+        if (!_active.count(k)) {
+            ret = createNew();
+            if (ret) {
+                _active[k] = ret;
+                created = true;
+            }
+        }
+        else {
+            ret = _active[k];
+            if (reuseOld)
+                reuseOld(ret);
+            // if (ret){
+            //     printf("reusing %s\n",typeid(ret).name());
+            // }
+        }
 
-    uint64_t copyBlock(char *buf, char *blkBuf, uint32_t blk, uint32_t startBlock, uint32_t endBlock, uint32_t fpIndex, uint64_t count);
+        if (ret)
+            ret->incUsers();
 
-    std::mutex _openCloseLock;
-    std::atomic<uint64_t> _fileSize;
-    uint32_t _numBlks;
-    uint32_t _regFileIndex;
-    Prefetcher *_prefetcher;
-  
+        _activeMutex.writerUnlock();
+        return ret;
+    }
+
+    static Value AddTrackable(Key k, std::function<Value(void)> createNew, bool &created) {
+        return AddTrackable(k, createNew, NULL, created);
+    }
+
+    static Value AddTrackable(Key k, std::function<Value(void)> createNew) {
+        bool dontCare;
+        return AddTrackable(k, createNew, NULL, dontCare);
+    }
+
+    static bool RemoveTrackable(Key k, unsigned int dec = 1) {
+        // printf("in remove trackable %d\n",_active.count(k));
+        bool ret = false;
+        _activeMutex.writerLock();
+        if (_active.count(k)) {
+            Value toDelete = _active[k];
+            if (toDelete->decUsers(dec)) {
+                // fprintf(stderr,"trackable delete %s\n",typeid(toDelete).name());
+                //std::cout<<"[TAZER] " << "Deleting Trackable!!! " <<typeid(toDelete).name()<< std::endl;
+                _active.erase(k);
+                delete toDelete;
+                ret = true;
+            }
+        }
+        _activeMutex.writerUnlock();
+        return ret;
+    }
+
+    static Value LookupTrackable(Key k) {
+        Value ret = NULL;
+        _activeMutex.readerLock();
+        if (_active.count(k))
+            ret = _active[k];
+        _activeMutex.readerUnlock();
+        return ret;
+    }
+
+    static void RemoveAllTrackable() {
+        _activeMutex.writerLock();
+        std::for_each(_active.begin(), _active.end(),
+                      [](std::pair<Key, Value> element) {
+                          delete element.second;
+                      });
+        _activeMutex.writerUnlock();
+    }
 
 
+private:
+  int _id;
+  std::atomic_uint _users;
+
+  static std::atomic_int _total;
+  static ReaderWriterLock _activeMutex;
+  static std::unordered_map<Key, Value> _active;
 };
 
-#endif /* InputFile_H_ */
+template <class Key, class Value>
+std::atomic_int Trackable<Key, Value>::_total(0);
+
+template <class Key, class Value>
+ReaderWriterLock Trackable<Key, Value>::_activeMutex;
+
+template <class Key, class Value>
+std::unordered_map<Key, Value> Trackable<Key, Value>::_active;
+
+#endif /* TRACKABLE_H */

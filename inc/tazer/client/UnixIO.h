@@ -72,62 +72,57 @@
 // 
 //*EndLicense****************************************************************
 
-#ifndef InputFile_H_
-#define InputFile_H_
-#include "Cache.h"
-#include "ConnectionPool.h"
-#include "FileCacheRegister.h"
-#include "TazerFile.h"
-#include "PriorityThreadPool.h"
-#include "ReaderWriterLock.h"
-#include "Prefetcher.h"
-#include <map>
-#include <atomic>
-#include <mutex>
-#include <string>
-#include <unordered_set>
+#ifndef UNIXIO_H_
+#define UNIXIO_H_
+#include <dlfcn.h>
+#include <stdio.h>
 
-class ScalableFileRegistry;
-extern std::map<std::string, std::map<int, std::atomic<int64_t> > > track_file_blk_r_stat;
+typedef int (*unixopen_t)(const char *path, int flags, ...);
+typedef int (*unixclose_t)(int fd);
+typedef int (*unixopenat_t)(int dirfd, const char *pathname, int flags, ...);
 
-class InputFile : public TazerFile {
-  public:
-    InputFile(std::string name, std::string metaName, int fd, bool openFile = true);
-    ~InputFile();
+typedef ssize_t (*unixread_t)(int fd, void *buf, size_t count);
+typedef ssize_t (*unixwrite_t)(int fd, const void *buf, size_t count);
 
-    static void cache_init(void);
+typedef ssize_t (*unixlseek_t)(int fd, off_t offset, int whence);
+typedef off64_t (*unixlseek64_t)(int fd, off64_t offset, int whence);
 
-    void open();
-    void close();
-    uint64_t fileSize();
-    // uint64_t numBlks();
+typedef int (*unixxstat_t)(int version, const char *filename, struct stat *buf);
+typedef int (*unixxstat64_t)(int version, const char *filename, struct stat64 *buf);
 
-    ssize_t read(void *buf, size_t count, uint32_t index = 0);
-    ssize_t write(const void *buf, size_t count, uint32_t index = 0);
-    off_t seek(off_t offset, int whence, uint32_t index = 0);
-    int vfprintf(unsigned int pos, int count);
+typedef int (*unixfsync_t)(int fd);
+typedef int (*unixfdatasync_t)(int fd);
 
-    static void printHits();
-    static PriorityThreadPool<std::packaged_task<std::shared_future<Request*>()>>* _transferPool;
-    static PriorityThreadPool<std::packaged_task<Request*()>>* _decompressionPool;
+typedef FILE *(*unixfopen_t)(__const char *__restrict __filename, __const char *__restrict __modes);
+typedef int (*unixfclose_t)(FILE *fp);
 
-    static Cache *_cache;
-    static std::chrono::time_point<std::chrono::high_resolution_clock>*  _time_of_last_read;
-  private:
-    uint64_t fileSizeFromServer();
+typedef size_t (*unixfread_t)(void *ptr, size_t size, size_t nmemb, FILE *stream);
+typedef size_t (*unixfwrite_t)(const void *ptr, size_t size, size_t nmemb, FILE *stream);
 
-    bool trackRead(size_t count, uint32_t index, uint32_t startBlock, uint32_t endBlock);
+typedef long int (*unixftell_t)(FILE *__stream);
+typedef int (*unixfseek_t)(FILE *__stream, long int __off, int __whence);
+typedef void (*unixrewind_t)(FILE *__stream);
 
-    uint64_t copyBlock(char *buf, char *blkBuf, uint32_t blk, uint32_t startBlock, uint32_t endBlock, uint32_t fpIndex, uint64_t count);
+typedef int (*unixfgetc_t)(FILE *fp);
+typedef char *(*unixfgets_t)(char *__restrict s, int n, FILE *__restrict fp);
+typedef int (*unixfputc_t)(int __c, FILE *__stream);
+typedef int (*unixfputs_t)(const char *__restrict __s, FILE *__restrict __stream);
 
-    std::mutex _openCloseLock;
-    std::atomic<uint64_t> _fileSize;
-    uint32_t _numBlks;
-    uint32_t _regFileIndex;
-    Prefetcher *_prefetcher;
-  
+typedef int (*unixfileno_t)(FILE *fp);
+typedef int (*unixflockfile_t)(FILE *fp);
+typedef int (*unixftrylockfile_t)(FILE *fp);
+typedef int (*unixfunlockfile_t)(FILE *fp);
 
+typedef int (*unixfflush_t)(FILE *fp);
+typedef int (*unixfeof_t)(FILE *fp);
 
-};
+typedef ssize_t (*unixreadv_t)(int fd, const struct iovec *iov, int iovcnt);
+typedef ssize_t (*unixwritev_t)(int fd, const struct iovec *iov, int iovcnt);
 
-#endif /* InputFile_H_ */
+typedef void (*unixexit_t)(int status);
+typedef void (*unix_exit_t)(int status);
+typedef void (*unix_Exit_t)(int status);
+typedef void (*unix_exit_group_t)(int status);
+
+typedef int (*unix_vfprintf_t)(FILE * stream, const char * format, va_list arg);
+#endif /* UNIXIO_H_ */

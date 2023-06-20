@@ -77,6 +77,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <fcntl.h>
+#include <linux/limits.h>
 #include <mutex>
 #include <sstream>
 #include <stdarg.h>
@@ -85,7 +86,12 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <fnmatch.h>
 #include <unordered_map>
+#include <map>
+#include <atomic>
+#include <string>
+#include <vector>
 #include <unordered_set>
 //#include "ErrorTester.h"
 #include "InputFile.h"
@@ -102,12 +108,16 @@
 #include "ThreadPool.h"
 #include "PriorityThreadPool.h"
 
+
 #define ADD_THROW __THROW
 
-//#define DPRINTF(...) fprintf(stderr, __VA_ARGS__)
-#define DPRINTF(...)
+#define DPRINTF(...) fprintf(stderr, __VA_ARGS__)
+// #define DPRINTF(...)
+// #define MYPRINTF(...) fprintf(stderr, __VA_ARGS__)
 
-static Timer timer;
+#define TRACKFILECHANGES 1
+
+static Timer* timer;
 
 std::once_flag log_flag;
 bool init = false;
@@ -119,8 +129,25 @@ static std::unordered_set<FILE *> track_fp;
 static std::unordered_set<int> ignore_fd;
 static std::unordered_set<FILE *> ignore_fp;
 
+// // The following map stores the filename, as well as the file descriptors, mode. We 
+// // Can extend this easily to save more info as part of the tuple. 
+// std::map<std::string, std::multimap<int, std::tuple<int>>> file_info;
+
+// std::map<int, std::string> file_info; // to reverse-lookup filename from fd
+// The following map stores the block information/ access freqency for each file
+std::map<std::string, std::map<int, std::atomic<int64_t> > > track_file_blk_r_stat;
+std::map<std::string, std::map<int, std::atomic<int64_t> > > track_file_blk_r_stat_size;
+std::map<std::string, std::map<int, std::atomic<int64_t> > > track_file_blk_w_stat;
+std::map<std::string, std::map<int, std::atomic<int64_t> > > track_file_blk_w_stat_size;
+//std::map<std::string, std::map<int, std::tuple<std::atomic<int64_t>, std::atomic<int64_t> > > > track_file_blk_w_stat;
+
+// For tracing
+std::map<std::string, std::vector<int> > trace_read_blk_seq;
+std::map<std::string, std::vector<int> > trace_write_blk_seq;
+
 unixopen_t unixopen = NULL;
 unixopen_t unixopen64 = NULL;
+unixopenat_t unixopenat = NULL;
 unixclose_t unixclose = NULL;
 unixread_t unixread = NULL;
 unixwrite_t unixwrite = NULL;
@@ -150,40 +177,72 @@ unixfflush_t unixfflush = NULL;
 unixfeof_t unixfeof = NULL;
 unixreadv_t unixreadv = NULL;
 unixwritev_t unixwritev = NULL;
+unixexit_t unixexit = NULL;
+unix_exit_t unix_exit = NULL;
+unix_Exit_t unix_Exit = NULL;
+unix_exit_group_t unix_exit_group = NULL;
+unix_vfprintf_t unix_vfprintf = NULL;
+
+bool write_printf = false;
+bool open_printf = false;
 
 int removeStr(char *s, const char *r);
 
 /*Templating*************************************************************************************************/
 
-inline bool splitter(std::string tok, std::string full, std::string &path, std::string &file) {
-    size_t pos = full.find(tok);
-    if (pos != std::string::npos) {
-        path = full.substr(0, pos + tok.length());
-        if (path.length() < full.length())
-            file = full.substr(path.length() + 1);
-        else
-            file = full;
-        return true;
-    }
-    path = full;
-    file = full;
-    return false;
-}
-
 inline bool checkMeta(const char *pathname, std::string &path, std::string &file, TazerFile::Type &type) {
-    if (strstr(pathname, ".meta.")) {
-        std::string full(pathname);
-        TazerFile::Type tokType[3] = {TazerFile::Input, TazerFile::Output, TazerFile::Local};
-        std::string tok[3] = {".meta.in", ".meta.out", ".meta.local"};
-        for (unsigned int i = 0; i < 3; i++) {
-            if (splitter(tok[i], full, path, file)) {
-                type = tokType[i];
-                DPRINTF("Path: %s File: %s\n", path.c_str(), file.c_str());
+
+
+  DPRINTF("Checkmeta calling open on file %s\n", pathname);
+    int fd = (*unixopen)(pathname, O_RDONLY);
+
+    if(fd >= 0)
+    {
+        const std::string tazerVersion("TAZER0.1");
+        //std::string types[3] = {"input", "output", "local"};
+        //TazerFile::Type tokType[3] = {TazerFile::Input, TazerFile::Output, TazerFile::Local};
+        std::string types = "TrackLocal";
+	TazerFile::Type tokType = TazerFile::TrackLocal;
+	int bufferSize = (tazerVersion.length() + 13); //need space for tazerVersion + \n + type= + (the type) + \0
+        char *meta = new char[bufferSize+1];
+
+        int ret = (*unixread)(fd, (void *)meta, bufferSize);
+	// MYPRINTF("Will be calling close on file %s\n", pathname);
+        (*unixclose)(fd);
+        if (ret <= 0) {
+            delete[] meta;
+            return false;
+        }
+        meta[bufferSize] = '\0';
+
+        std::stringstream ss(meta);
+        std::string curLine;
+
+        std::getline(ss, curLine);
+        if(curLine.compare(0, tazerVersion.length(), tazerVersion) != 0) {
+            delete[] meta;
+	    return false;
+        }
+
+        std::getline(ss, curLine);
+        if(curLine.compare(0, 5, "type=") != 0) {
+            delete[] meta;
+            return false;
+        }
+
+        std::string typeStr = curLine.substr(5, curLine.length() - 5);
+        //for(int i = 0; i < 3; i++) {
+            if(typeStr.compare(types) == 0) {
+                path = pathname;
+                file = pathname;
+                type = tokType;
+                // DPRINTF("Path: %s File: %s\n", path.c_str(), file.c_str());
+                delete[] meta;
                 return true;
             }
-        }
+        //}
+        delete[] meta;
     }
-    DPRINTF("~ %s Path: %s File: %s\n", pathname, path.c_str(), file.c_str());
     return false;
 }
 
@@ -217,19 +276,36 @@ inline void removeFileStream(unixfclose_t posixFun, FILE *fp) {
 
 template <typename Func, typename FuncLocal, typename... Args>
 inline auto innerWrapper(int fd, bool &isTazerFile, Func tazerFun, FuncLocal localFun, Args... args) {
+  // DPRINTF("[Tazer] in innerwrapper 3\n");
+
     TazerFile *file = NULL;
     unsigned int fp = 0;
-    if (init && TazerFileDescriptor::lookupTazerFileDescriptor(fd, file, fp)) {
-        isTazerFile = true;
 
+    DPRINTF("[Tazer] in innerwrapper 3 init val: %d , fd val %d \n", init, fd);
+
+    
+    if (init && TazerFileDescriptor::lookupTazerFileDescriptor(fd, file, fp)) {
+      DPRINTF("Found a file with fd %d\n", fd);
+        isTazerFile = true;
+	DPRINTF("calling Tazer function\n");	
         return tazerFun(file, fp, args...);
     }
+    // else if (not internal write) {
+    // do track
+    
+    //}
+    DPRINTF("[Tazer] in innerwrapper 3 for write calling localfun\n");
+
     return localFun(args...);
 }
 
 template <typename Func, typename FuncLocal, typename... Args>
 inline auto innerWrapper(FILE *fp, bool &isTazerFile, Func tazerFun, FuncLocal localFun, Args... args) {
-    if (init) {
+  // if (write_printf == true) {
+  //   DPRINTF("[Tazer] in innerwrapper 2 for write\n");
+  // }
+
+  if (init) {
         ReaderWriterLock *lock = NULL;
         int fd = TazerFileStream::lookupStream(fp, lock);
         if (fd != -1) {
@@ -238,25 +314,68 @@ inline auto innerWrapper(FILE *fp, bool &isTazerFile, Func tazerFun, FuncLocal l
             TazerFile *file = NULL;
             unsigned int pos = 0;
             TazerFileDescriptor::lookupTazerFileDescriptor(fd, file, pos);
+	    // if (write_printf == true) {
+	    //   DPRINTF("[Tazer] in innerwrapper 2 for write calling Tazerfun\n");
+	    // }
             auto ret = tazerFun(file, pos, fd, args...);
             lock->writerUnlock();
             removeFileStream(localFun, fp);
             return ret;
         }
     }
-    return localFun(args...);
+  return localFun(args...);
 }
 
 template <typename Func, typename FuncPosix, typename... Args>
 inline auto innerWrapper(const char *pathname, bool &isTazerFile, Func tazerFun, FuncPosix posixFun, Args... args) {
-    std::string path;
-    std::string file;
-    TazerFile::Type type;
-    if (init && checkMeta(pathname, path, file, type)) {
-        isTazerFile = true;
-        return tazerFun(file, path, type, args...);
-    }
+  std::string path;
+  std::string file;
+  TazerFile::Type type;
+  
+  std::string test_tty(pathname);
+  if(test_tty.find("tty") != std::string::npos) {
     return posixFun(args...);
+  }
+
+  std::vector<std::string> patterns;
+  patterns.push_back("*.fits");
+  patterns.push_back("*.h5");
+  patterns.push_back("*.vcf");
+  patterns.push_back("*.fna");
+  patterns.push_back("*.*.bt2");
+  patterns.push_back("*.fastaq");
+  patterns.push_back("*.tar.gz");
+  patterns.push_back("*.txt");
+  patterns.push_back("*.lht");
+  patterns.push_back("*.fasta.amb");
+  patterns.push_back("*.fasta.sa");
+  patterns.push_back("*.fasta.bwt");
+  patterns.push_back("*.fasta.pac");
+  patterns.push_back("*.fasta.ann");
+  patterns.push_back("*.fasta");
+  for (auto pattern: patterns) {
+    auto ret_val = fnmatch(pattern.c_str(), pathname, 0);
+    DPRINTF("PATTERN: %s PATHNAME: %s \n", pattern.c_str(), pathname);
+    if (ret_val == 0) {
+      isTazerFile = true;
+      std::string filename(pathname);
+      type = TazerFile::TrackLocal;
+      file = filename;
+      path = filename;
+      DPRINTF("Calling HDF/FITS open: \n");
+      return tazerFun(file, path, type, args...);
+    }
+  }
+
+  if (init && checkMeta(pathname, path, file, type)) {
+    isTazerFile = true;
+    // DPRINTF("tazerfun With file %s\n", pathname);
+    return tazerFun(file, path, type, args...);
+  }
+  // DPRINTF("[Tazer] in innerwrapper calling posix\n");
+  
+
+  return posixFun(args...);
 }
 
 template <typename T1, typename T2>
@@ -283,12 +402,14 @@ inline void removeFromSet(std::unordered_set<FILE *> &set, FILE *value, unixfclo
 
 template <typename FileId, typename Func, typename FuncPosix, typename... Args>
 auto outerWrapper(const char *name, FileId fileId, Timer::Metric metric, Func tazerFun, FuncPosix posixFun, Args... args) {
-    if (!init) {
-        posixFun = (FuncPosix)dlsym(RTLD_NEXT, name);
-        return posixFun(args...);
+  // DPRINTF("command %s\n", name);
+
+  if (!init) {
+      posixFun = (FuncPosix)dlsym(RTLD_NEXT, name);
+      return posixFun(args...);
     }
 
-    timer.start();
+    timer->start();
 
     //Check if this is a special file to track (from environment variable)
     bool track = trackFile(fileId);
@@ -299,13 +420,12 @@ auto outerWrapper(const char *name, FileId fileId, Timer::Metric metric, Func ta
     //Check if a tazer meta-file
     bool isTazerFile = false;
 
-    //Do the work
     auto retValue = innerWrapper(fileId, isTazerFile, tazerFun, posixFun, args...);
     if (ignore) {
         //Maintain the ignore_fd set
         addToSet(ignore_fd, retValue, posixFun);
         removeFromSet(ignore_fd, retValue, posixFun);
-        timer.end(Timer::MetricType::local, Timer::Metric::dummy); //to offset the call to start()
+        timer->end(Timer::MetricType::local, Timer::Metric::dummy); //to offset the call to start()
     }
     else { //End Timers!
         if (track) {
@@ -316,23 +436,23 @@ auto outerWrapper(const char *name, FileId fileId, Timer::Metric metric, Func ta
             std::string("write").compare(std::string(name)) == 0){
                 ssize_t ret = *reinterpret_cast<ssize_t*> (&retValue);
                 if (ret != -1) {
-                    timer.addAmt(Timer::MetricType::local, metric,ret);
+                    timer->addAmt(Timer::MetricType::local, metric, ret);
                 }
             }
-            timer.end(Timer::MetricType::local, metric);
+            timer->end(Timer::MetricType::local, metric);
         }
         else if (isTazerFile){
-            timer.end(Timer::MetricType::tazer, metric);
+            timer->end(Timer::MetricType::tazer, metric);
         }
         else{
             if (std::string("read").compare(std::string(name)) == 0 ||
             std::string("write").compare(std::string(name)) == 0){
                 ssize_t ret = *reinterpret_cast<ssize_t*> (&retValue);
                 if (ret != -1) {
-                    timer.addAmt(Timer::MetricType::system, metric,ret);
+                    timer->addAmt(Timer::MetricType::system, metric, ret);
                 }
             }
-            timer.end(Timer::MetricType::system, metric);
+            timer->end(Timer::MetricType::system, metric);
         }
     }
     return retValue;
@@ -343,6 +463,7 @@ auto outerWrapper(const char *name, FileId fileId, Timer::Metric metric, Func ta
 int tazerOpen(std::string name, std::string metaName, TazerFile::Type type, const char *pathname, int flags, int mode);
 int open(const char *pathname, int flags, ...);
 int open64(const char *pathname, int flags, ...);
+int openat(int dirfd, const char *pathname, int flags, ...);
 
 int tazerClose(TazerFile *file, unsigned int fp, int fd);
 int close(int fd);
@@ -412,3 +533,10 @@ int feof(FILE *fp) ADD_THROW;
 
 off_t tazerRewind(TazerFile *file, unsigned int pos, int fd, int fd2, off_t offset, int whence);
 void rewind(FILE *fp);
+
+
+int trackFileOpen(std::string name, std::string metaName, TazerFile::Type type, const char *pathname, int flags, int mode);
+int tazerOpenat(std::string name, std::string metaName, TazerFile::Type type, 
+		int dirfd, const char *pathname, int flags, int mode);
+int trackFileOpenat(std::string name, std::string metaName, TazerFile::Type type, 
+		    int dirfd, const char *pathname, int flags, int mode);

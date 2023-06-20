@@ -72,62 +72,101 @@
 // 
 //*EndLicense****************************************************************
 
-#ifndef InputFile_H_
-#define InputFile_H_
-#include "Cache.h"
-#include "ConnectionPool.h"
-#include "FileCacheRegister.h"
-#include "TazerFile.h"
-#include "PriorityThreadPool.h"
-#include "ReaderWriterLock.h"
-#include "Prefetcher.h"
-#include <map>
-#include <atomic>
-#include <mutex>
-#include <string>
-#include <unordered_set>
+#ifndef REQUEST_H
+#define REQUEST_H
+#include "Timer.h"
+#include "CacheTypes.h"
+#include "Loggable.h"
 
-class ScalableFileRegistry;
-extern std::map<std::string, std::map<int, std::atomic<int64_t> > > track_file_blk_r_stat;
+#include <sstream>
+#include <string.h>
+#include <unordered_map>
+#include <thread>
 
-class InputFile : public TazerFile {
-  public:
-    InputFile(std::string name, std::string metaName, int fd, bool openFile = true);
-    ~InputFile();
+class Cache;
 
-    static void cache_init(void);
+struct RequestTrace{
+    RequestTrace(std::ostream *o, bool trigger): _o(o), _trigger(trigger){ }
 
-    void open();
-    void close();
-    uint64_t fileSize();
-    // uint64_t numBlks();
+    template <class T>
+    RequestTrace &operator<<(const T &val) {
+        if (_trigger){
+            *_o << val;
+        }
+        return *this;
+    }
 
-    ssize_t read(void *buf, size_t count, uint32_t index = 0);
-    ssize_t write(const void *buf, size_t count, uint32_t index = 0);
-    off_t seek(off_t offset, int whence, uint32_t index = 0);
-    int vfprintf(unsigned int pos, int count);
+    RequestTrace &operator<<(std::ostream &(*f)(std::ostream &)) {
+        if (_trigger){
+            *_o << f;
+        }
+        return *this;
+    }
 
-    static void printHits();
-    static PriorityThreadPool<std::packaged_task<std::shared_future<Request*>()>>* _transferPool;
-    static PriorityThreadPool<std::packaged_task<Request*()>>* _decompressionPool;
+    RequestTrace &operator<<(std::ostream &(*f)(std::ios &)) {
+        if (_trigger){
+            *_o << f;
+        }
+        return *this;
+    }
 
-    static Cache *_cache;
-    static std::chrono::time_point<std::chrono::high_resolution_clock>*  _time_of_last_read;
-  private:
-    uint64_t fileSizeFromServer();
-
-    bool trackRead(size_t count, uint32_t index, uint32_t startBlock, uint32_t endBlock);
-
-    uint64_t copyBlock(char *buf, char *blkBuf, uint32_t blk, uint32_t startBlock, uint32_t endBlock, uint32_t fpIndex, uint64_t count);
-
-    std::mutex _openCloseLock;
-    std::atomic<uint64_t> _fileSize;
-    uint32_t _numBlks;
-    uint32_t _regFileIndex;
-    Prefetcher *_prefetcher;
-  
-
+    RequestTrace &operator<<(std::ostream &(*f)(std::ios_base &)) {
+        if (_trigger){
+            *_o << f;
+        }
+        return *this;
+    }
+    private:
+    std::ostream *_o;
+    bool _trigger;
 
 };
 
-#endif /* InputFile_H_ */
+struct Request {
+    uint8_t *data;
+    Cache *originating;
+    uint32_t blkIndex;
+    uint32_t fileIndex;
+    uint64_t offset;
+    uint64_t size;
+    uint64_t time;
+    uint64_t retryTime;
+    uint64_t deliveryTime;
+    std::unordered_map<Cache *, uint8_t> reservedMap;
+    bool ready;
+    bool printTrace;
+    bool globalTrigger;
+    bool skipWrite;
+    CacheType waitingCache;
+    std::unordered_map<Cache *, uint64_t> indexMap;
+    std::unordered_map<Cache *, uint64_t> blkIndexMap;
+    std::unordered_map<Cache *, uint64_t> fileIndexMap;
+    std::unordered_map<Cache *, uint64_t> statusMap;
+    uint64_t id;
+    std::thread::id threadId;
+    std::stringstream ss;
+
+    Request() : data(NULL),originating(NULL),blkIndex(0),fileIndex(0), offset(0), size(0), deliveryTime(0), globalTrigger(false), skipWrite(false), threadId(std::this_thread::get_id()){ }
+    Request(uint32_t blk, uint32_t fileIndex, uint64_t size, uint64_t offset, Cache *orig, uint8_t *data) : data(data), originating(orig), blkIndex(blk), fileIndex(fileIndex), 
+                                                                                           offset(offset), size(size), time(Timer::getCurrentTime()), retryTime(0), deliveryTime(0), ready(false), 
+                                                                                           printTrace(false), globalTrigger(false), skipWrite(false),
+                                                                                           waitingCache(CacheType::empty),id(Request::ID_CNT.fetch_add(1)), threadId(std::this_thread::get_id()) {
+
+    }
+    ~Request();
+    std::string str();
+    void flushTrace();
+
+
+    RequestTrace trace(std::string tag = "");
+    RequestTrace trace(bool trigger = true, std::string tag = "");
+
+    private:
+        
+        static std::atomic<uint64_t> ID_CNT;
+        static std::atomic<uint64_t> RET_ID_CNT;
+};
+
+
+
+#endif //REQUEST_H

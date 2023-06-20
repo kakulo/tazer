@@ -72,62 +72,32 @@
 // 
 //*EndLicense****************************************************************
 
-#ifndef InputFile_H_
-#define InputFile_H_
+#ifndef LOCALFILECACHE_H
+#define LOCALFILECACHE_H
 #include "Cache.h"
-#include "ConnectionPool.h"
-#include "FileCacheRegister.h"
-#include "TazerFile.h"
-#include "PriorityThreadPool.h"
-#include "ReaderWriterLock.h"
-#include "Prefetcher.h"
-#include <map>
-#include <atomic>
-#include <mutex>
-#include <string>
-#include <unordered_set>
 
-class ScalableFileRegistry;
-extern std::map<std::string, std::map<int, std::atomic<int64_t> > > track_file_blk_r_stat;
+#define LOCALFILECACHENAME "localfilecache"
 
-class InputFile : public TazerFile {
+class LocalFileCache : public Cache {
   public:
-    InputFile(std::string name, std::string metaName, int fd, bool openFile = true);
-    ~InputFile();
+    LocalFileCache(std::string cacheName, CacheType type);
+    virtual ~LocalFileCache();
 
-    static void cache_init(void);
+    bool writeBlock(Request *req);
 
-    void open();
-    void close();
-    uint64_t fileSize();
-    // uint64_t numBlks();
+    virtual void readBlock(Request *req, std::unordered_map<uint32_t, std::shared_future<std::shared_future<Request *>>> &reads, uint64_t priority);
+    void printStats();
 
-    ssize_t read(void *buf, size_t count, uint32_t index = 0);
-    ssize_t write(const void *buf, size_t count, uint32_t index = 0);
-    off_t seek(off_t offset, int whence, uint32_t index = 0);
-    int vfprintf(unsigned int pos, int count);
+    static Cache *addNewLocalFileCache(std::string cacheName, CacheType type);
+    void addFile(uint32_t index, std::string filename, uint64_t blockSize, std::uint64_t fileSize);
+    void removeFile(uint32_t index);
+    
 
-    static void printHits();
-    static PriorityThreadPool<std::packaged_task<std::shared_future<Request*>()>>* _transferPool;
-    static PriorityThreadPool<std::packaged_task<Request*()>>* _decompressionPool;
-
-    static Cache *_cache;
-    static std::chrono::time_point<std::chrono::high_resolution_clock>*  _time_of_last_read;
   private:
-    uint64_t fileSizeFromServer();
-
-    bool trackRead(size_t count, uint32_t index, uint32_t startBlock, uint32_t endBlock);
-
-    uint64_t copyBlock(char *buf, char *blkBuf, uint32_t blk, uint32_t startBlock, uint32_t endBlock, uint32_t fpIndex, uint64_t count);
-
-    std::mutex _openCloseLock;
-    std::atomic<uint64_t> _fileSize;
-    uint32_t _numBlks;
-    uint32_t _regFileIndex;
-    Prefetcher *_prefetcher;
-  
-
-
+    virtual void cleanUpBlockData(uint8_t *data);
+    uint8_t *getBlockData(std::ifstream *file, uint32_t blockIndex, uint64_t blockSize,uint64_t fileSize);
+    std::unordered_map<uint32_t, std::pair<std::ifstream *, ReaderWriterLock *>> _fstreamMap;
+    ReaderWriterLock *_lock;
 };
 
-#endif /* InputFile_H_ */
+#endif /* LOCALFILECACHE_H */

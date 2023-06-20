@@ -72,62 +72,91 @@
 // 
 //*EndLicense****************************************************************
 
-#ifndef InputFile_H_
-#define InputFile_H_
-#include "Cache.h"
-#include "ConnectionPool.h"
-#include "FileCacheRegister.h"
-#include "TazerFile.h"
-#include "PriorityThreadPool.h"
-#include "ReaderWriterLock.h"
-#include "Prefetcher.h"
-#include <map>
+#ifndef TIMER_H
+#define TIMER_H
+
 #include <atomic>
-#include <mutex>
+#include <chrono>
+#include <fstream>
 #include <string>
-#include <unordered_set>
+#include <thread>
+#include <unordered_map>
+#include <vector>
 
-class ScalableFileRegistry;
-extern std::map<std::string, std::map<int, std::atomic<int64_t> > > track_file_blk_r_stat;
+#include "ReaderWriterLock.h"
 
-class InputFile : public TazerFile {
+class Timer {
   public:
-    InputFile(std::string name, std::string metaName, int fd, bool openFile = true);
-    ~InputFile();
+    enum MetricType {
+        tazer = 0,
+        local,
+        system,
+        lastMetric
+    };
 
-    static void cache_init(void);
+    enum Metric {
+        in_open = 0,
+        out_open,
+        close,
+        read,
+        write,
+        seek,
+        stat,
+        fsync,
+        readv,
+        writev,
+        in_fopen,
+        out_fopen,
+        fclose,
+        fread,
+        fwrite,
+        ftell,
+        fseek,
+        fgetc,
+        fgets,
+        fputc,
+        fputs,
+        feof,
+        rewind,
+        constructor,
+        destructor,
+        dummy, //use to match calls to start...
+        last
+    };
 
-    void open();
-    void close();
-    uint64_t fileSize();
-    // uint64_t numBlks();
+    Timer();
+    ~Timer();
 
-    ssize_t read(void *buf, size_t count, uint32_t index = 0);
-    ssize_t write(const void *buf, size_t count, uint32_t index = 0);
-    off_t seek(off_t offset, int whence, uint32_t index = 0);
-    int vfprintf(unsigned int pos, int count);
+    void start();
+    void end(MetricType type, Metric metric);
+    void addAmt(MetricType type, Metric metric, uint64_t amt);
 
-    static void printHits();
-    static PriorityThreadPool<std::packaged_task<std::shared_future<Request*>()>>* _transferPool;
-    static PriorityThreadPool<std::packaged_task<Request*()>>* _decompressionPool;
+    static uint64_t getCurrentTime();
+    static char *printTime();
+    static int64_t getTimestamp();
 
-    static Cache *_cache;
-    static std::chrono::time_point<std::chrono::high_resolution_clock>*  _time_of_last_read;
   private:
-    uint64_t fileSizeFromServer();
+    void addThread(std::thread::id id);
+    class ThreadMetric {
+      public:
+        ThreadMetric();
+        ~ThreadMetric();
+        std::atomic<uint64_t> *current;
+        std::atomic<uint64_t> *depth;
+        std::atomic<uint64_t> *time[Timer::MetricType::lastMetric][Timer::Metric::last];
+        std::atomic<uint64_t> *cnt[Timer::MetricType::lastMetric][Timer::Metric::last];
+        std::atomic<uint64_t> *amt[Timer::MetricType::lastMetric][Timer::Metric::last];
+    };
 
-    bool trackRead(size_t count, uint32_t index, uint32_t startBlock, uint32_t endBlock);
+    const double billion = 1000000000;
+    std::unordered_map<std::thread::id, Timer::ThreadMetric*> *_thread_timers;
+    uint64_t _time[Timer::MetricType::lastMetric][Timer::Metric::last];
+    uint64_t _cnt[Timer::MetricType::lastMetric][Timer::Metric::last];
+    uint64_t _amt[Timer::MetricType::lastMetric][Timer::Metric::last];
+    ReaderWriterLock _lock;
 
-    uint64_t copyBlock(char *buf, char *blkBuf, uint32_t blk, uint32_t startBlock, uint32_t endBlock, uint32_t fpIndex, uint64_t count);
-
-    std::mutex _openCloseLock;
-    std::atomic<uint64_t> _fileSize;
-    uint32_t _numBlks;
-    uint32_t _regFileIndex;
-    Prefetcher *_prefetcher;
-  
-
-
+    int stdoutcp;
+    std::string myprogname;
 };
 
-#endif /* InputFile_H_ */
+#endif /* TIMER_H */

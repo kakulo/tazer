@@ -72,62 +72,47 @@
 // 
 //*EndLicense****************************************************************
 
-#ifndef InputFile_H_
-#define InputFile_H_
+#ifndef UnboundedCache_H
+#define UnboundedCache_H
 #include "Cache.h"
-#include "ConnectionPool.h"
-#include "FileCacheRegister.h"
-#include "TazerFile.h"
-#include "PriorityThreadPool.h"
+#include "Loggable.h"
 #include "ReaderWriterLock.h"
-#include "Prefetcher.h"
-#include <map>
-#include <atomic>
-#include <mutex>
-#include <string>
-#include <unordered_set>
+#include "Trackable.h"
+#include "UnixIO.h"
+#include <future>
 
-class ScalableFileRegistry;
-extern std::map<std::string, std::map<int, std::atomic<int64_t> > > track_file_blk_r_stat;
+#define UBC_BLK_EMPTY 0
+#define UBC_BLK_PRE 1
+#define UBC_BLK_RES 2
+#define UBC_BLK_WR 3
+#define UBC_BLK_AVAIL 4
 
-class InputFile : public TazerFile {
+class UnboundedCache : public Cache {
   public:
-    InputFile(std::string name, std::string metaName, int fd, bool openFile = true);
-    ~InputFile();
+    UnboundedCache(std::string cacheName, CacheType type, uint64_t blockSize);
+    virtual ~UnboundedCache();
 
-    static void cache_init(void);
+    virtual bool writeBlock(Request* req);
 
-    void open();
-    void close();
-    uint64_t fileSize();
-    // uint64_t numBlks();
+    virtual void readBlock(Request* req, std::unordered_map<uint32_t, std::shared_future<std::shared_future<Request*>>> &reads, uint64_t priority);
 
-    ssize_t read(void *buf, size_t count, uint32_t index = 0);
-    ssize_t write(const void *buf, size_t count, uint32_t index = 0);
-    off_t seek(off_t offset, int whence, uint32_t index = 0);
-    int vfprintf(unsigned int pos, int count);
+    virtual void addFile(uint32_t index, std::string filename, uint64_t blockSize, std::uint64_t fileSize);
 
-    static void printHits();
-    static PriorityThreadPool<std::packaged_task<std::shared_future<Request*>()>>* _transferPool;
-    static PriorityThreadPool<std::packaged_task<Request*()>>* _decompressionPool;
+  protected:
+    virtual bool blockSet(uint32_t index, uint32_t fileIndex, uint8_t byte) = 0;
+    virtual bool blockReserve(unsigned int index, unsigned int fileIndex) = 0;
+    // virtual bool blockReserve(uint32_t index, uint32_t fileIndex, bool prefetch = false)=0;
+    virtual void cleanReservation();
+    virtual void cleanUpBlockData(uint8_t *data) = 0;
+    virtual bool blockAvailable(uint32_t index, uint32_t fileIndex, bool arg = false) = 0;
+    virtual bool blockWritable(uint32_t index, uint32_t fileIndex, bool arg = false) = 0;
+    virtual uint8_t *getBlockData(uint32_t blockIndex, uint32_t fileIndex) = 0;
+    virtual void setBlockData(uint8_t *data, uint32_t blockIndex, uint64_t size, uint32_t fileIndex) = 0;
 
-    static Cache *_cache;
-    static std::chrono::time_point<std::chrono::high_resolution_clock>*  _time_of_last_read;
-  private:
-    uint64_t fileSizeFromServer();
-
-    bool trackRead(size_t count, uint32_t index, uint32_t startBlock, uint32_t endBlock);
-
-    uint64_t copyBlock(char *buf, char *blkBuf, uint32_t blk, uint32_t startBlock, uint32_t endBlock, uint32_t fpIndex, uint64_t count);
-
-    std::mutex _openCloseLock;
-    std::atomic<uint64_t> _fileSize;
-    uint32_t _numBlks;
-    uint32_t _regFileIndex;
-    Prefetcher *_prefetcher;
-  
-
-
+    uint64_t _blockSize;
+    std::atomic_uint _outstanding;
+    std::unordered_map<uint32_t, std::atomic<uint8_t> *> _blkIndex;
+    ReaderWriterLock *_lock;
 };
 
-#endif /* InputFile_H_ */
+#endif /* UnboundedCache_H */

@@ -73,21 +73,17 @@
 //*EndLicense****************************************************************
 
 #include "LocalFile.h"
-#include "caches/Cache.h"
-#include "caches/bounded/NewBoundedFilelockCache.h"
-#include "caches/bounded/NewSharedMemoryCache.h"
-#include "caches/bounded/NewMemoryCache.h"
-#include "caches/bounded/deprecated/BoundedFilelockCache.h"
-#include "caches/bounded/deprecated/SharedMemoryCache.h"
-#include "caches/bounded/deprecated/MemoryCache.h"
-#include "caches/bounded/deprecated/FileCache.h"
-#include "caches/unbounded/FilelockCache.h"
-#include "caches/unbounded/FcntlCache.h"
-#include "caches/unbounded/UrlCache.h"
-#include "caches/LocalFileCache.h"
-#include "caches/NetworkCache.h"
-#include "caches/UrlDownload.h"
-#include "caches/UrlFileCache.h"
+#include "Cache.h"
+#include "BoundedFilelockCache.h"
+#include "SharedMemoryCache.h"
+#include "MemoryCache.h"
+#include "FilelockCache.h"
+#include "FcntlCache.h"
+#include "UrlCache.h"
+#include "LocalFileCache.h"
+#include "NetworkCache.h"
+#include "UrlDownload.h"
+#include "UrlFileCache.h"
 
 #include "Config.h"
 #include "Connection.h"
@@ -124,13 +120,13 @@ void LocalFile::cache_init() {
     Cache *c = NULL;
 
     if (Config::useMemoryCache) {
-        c = MemoryCache::addNewMemoryCache(MEMORYCACHENAME, CacheType::privateMemory, Config::memoryCacheSize, Config::memoryCacheBlocksize, Config::memoryCacheAssociativity);
+        c = MemoryCache::addMemoryCache(MEMORYCACHENAME, CacheType::privateMemory, Config::memoryCacheSize, Config::memoryCacheBlocksize, Config::memoryCacheAssociativity);
         std::cerr << "[TAZER] " << "mem cache: " << (void *)c << std::endl;
         LocalFile::_cache->addCacheLevel(c, ++level);
     }
 
     if (Config::useSharedMemoryCache) {
-        c = SharedMemoryCache::addNewSharedMemoryCache(SHAREDMEMORYCACHENAME,CacheType::sharedMemory, Config::sharedMemoryCacheSize, Config::sharedMemoryCacheBlocksize, Config::sharedMemoryCacheAssociativity);
+        c = SharedMemoryCache::addSharedMemoryCache(SHAREDMEMORYCACHENAME,CacheType::sharedMemory, Config::sharedMemoryCacheSize, Config::sharedMemoryCacheBlocksize, Config::sharedMemoryCacheAssociativity,NULL);
         std::cerr << "[TAZER] " << "shared mem cache: " << (void *)c << std::endl;
         LocalFile::_cache->addCacheLevel(c, ++level);
     }
@@ -153,7 +149,7 @@ void LocalFile::cache_init() {
     LocalFile::_cache->addCacheLevel(c, ++level);
 }
 
-LocalFile::LocalFile(std::string name, std::string metaName, int fd, bool openFile) : TazerFile(TazerFile::Type::Local, name, metaName, fd),
+LocalFile::LocalFile(std::string name, std::string metaName, int fd, bool openFile) : TazerFile(TazerFile::Type::TrackLocal, name, metaName, fd),
                                                                                       _fileSize(0),
                                                                                       _numBlks(0),
                                                                                       _regFileIndex(id()), 
@@ -276,7 +272,7 @@ ssize_t LocalFile::read(void *buf, size_t count, uint32_t index) {
         std::unordered_map<uint32_t, std::shared_future<std::shared_future<Request *>>> reads;
         uint64_t priority = 0;
         for (uint32_t blk = startBlock; blk < endBlock; blk++) {
-            auto request = _cache->requestBlock(blk, _blkSize, _regFileIndex, reads, priority);
+            auto request = _cache->requestBlock(blk, _blkSize, _regFileIndex, _filePos[index], reads, priority);
             if (request->ready) {
                 copyBlock(localPtr, (char *)request->data, blk, startBlock, endBlock, index, count);
                 _cache->bufferWrite(request);
@@ -303,6 +299,11 @@ ssize_t LocalFile::write(const void *buf, size_t count, uint32_t index) {
     *this << "in LocalFile write.... need to implement... exiting" << std::endl;
     exit(-1);
     return 0;
+}
+
+int LocalFile::vfprintf(unsigned int pos, int count) {
+  exit(-1);
+  return 0;
 }
 
 uint64_t LocalFile::fileSize() {

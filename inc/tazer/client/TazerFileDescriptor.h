@@ -77,13 +77,14 @@
 
 #include "TazerFile.h"
 #include "Trackable.h"
+#include "OutputFile.h"
 
 class TazerFileDescriptor : public Trackable<int, TazerFileDescriptor *> {
   public:
     static bool lookupTazerFileDescriptor(int fd, TazerFile *&file, unsigned int &index);
     static bool addTazerFileDescriptor(int fd, TazerFile *file, unsigned int index);
     static bool removeTazerFileDescriptor(int fd);
-
+    TazerFile* getFile() {return _file;}
     TazerFileDescriptor(TazerFile *file, unsigned int index);
     ~TazerFileDescriptor();
 

@@ -72,62 +72,93 @@
 // 
 //*EndLicense****************************************************************
 
-#ifndef InputFile_H_
-#define InputFile_H_
-#include "Cache.h"
-#include "ConnectionPool.h"
-#include "FileCacheRegister.h"
-#include "TazerFile.h"
-#include "PriorityThreadPool.h"
-#include "ReaderWriterLock.h"
-#include "Prefetcher.h"
-#include <map>
+#ifndef SCALABLE_ALLOCATOR_H
+#define SCALABLE_ALLOCATOR_H
+#include "ScalableMetaData.h"
+#include <vector>
 #include <atomic>
-#include <mutex>
-#include <string>
-#include <unordered_set>
 
-class ScalableFileRegistry;
-extern std::map<std::string, std::map<int, std::atomic<int64_t> > > track_file_blk_r_stat;
+// #define PPRINTF(...) fprintf(stderr, __VA_ARGS__); fflush(stderr)
 
-class InputFile : public TazerFile {
-  public:
-    InputFile(std::string name, std::string metaName, int fd, bool openFile = true);
-    ~InputFile();
+class TazerAllocator : public Trackable<std::string, TazerAllocator *>
+{
+    protected:
+        //JS: This hook will turn on and off code path to perform LRU across all blocks in ScalableCache::set_block
+        const bool _canFail;
+        uint64_t _blockSize;
+        uint64_t _maxSize;
 
-    static void cache_init(void);
+        std::atomic<uint64_t> _availBlocks;
+    
+        TazerAllocator(uint64_t blockSize, uint64_t maxSize, bool canFail):
+            _canFail(canFail),
+            _blockSize(blockSize),
+            _maxSize(maxSize),
+            _availBlocks(maxSize/blockSize) { }
 
-    void open();
-    void close();
-    uint64_t fileSize();
-    // uint64_t numBlks();
+        ~TazerAllocator() { }
 
-    ssize_t read(void *buf, size_t count, uint32_t index = 0);
-    ssize_t write(const void *buf, size_t count, uint32_t index = 0);
-    off_t seek(off_t offset, int whence, uint32_t index = 0);
-    int vfprintf(unsigned int pos, int count);
+        template<class T>
+        static TazerAllocator * addAllocator(std::string name, uint64_t blockSize, uint64_t maxSize) {
+            bool created = false;
+            auto ret = Trackable<std::string, TazerAllocator *>::AddTrackable(
+                name, [&]() -> TazerAllocator * {
+                    TazerAllocator *temp = new T(blockSize, maxSize);
+                    return temp;
+                }, created);
+            return ret;
+        }
 
-    static void printHits();
-    static PriorityThreadPool<std::packaged_task<std::shared_future<Request*>()>>* _transferPool;
-    static PriorityThreadPool<std::packaged_task<Request*()>>* _decompressionPool;
-
-    static Cache *_cache;
-    static std::chrono::time_point<std::chrono::high_resolution_clock>*  _time_of_last_read;
-  private:
-    uint64_t fileSizeFromServer();
-
-    bool trackRead(size_t count, uint32_t index, uint32_t startBlock, uint32_t endBlock);
-
-    uint64_t copyBlock(char *buf, char *blkBuf, uint32_t blk, uint32_t startBlock, uint32_t endBlock, uint32_t fpIndex, uint64_t count);
-
-    std::mutex _openCloseLock;
-    std::atomic<uint64_t> _fileSize;
-    uint32_t _numBlks;
-    uint32_t _regFileIndex;
-    Prefetcher *_prefetcher;
-  
-
-
+    public:
+        virtual uint8_t * allocateBlock(uint32_t allocateForFileIndex, bool must = false) = 0;
+        virtual void closeFile(ScalableMetaData * meta) { }
+        virtual void openFile(ScalableMetaData * meta) { }
+        bool canReturnEmpty() { return _canFail; }
 };
 
-#endif /* InputFile_H_ */
+//JS: This is an example of the simplest allocator I can think of
+class SimpleAllocator : public TazerAllocator
+{
+    public:
+        SimpleAllocator(uint64_t blockSize, uint64_t maxSize):
+            TazerAllocator(blockSize, maxSize, false) { }
+
+        uint8_t * allocateBlock(uint32_t allocateForFileIndex, bool must = false) {
+            return new uint8_t[_blockSize];
+        }
+
+        static TazerAllocator * addSimpleAllocator(uint64_t blockSize, uint64_t maxSize) {
+            return addAllocator<SimpleAllocator>(std::string("SimpleAllocator"), blockSize, maxSize);
+        }
+};
+
+//JS: This is an allocator that can run out of space
+class FirstTouchAllocator : public TazerAllocator
+{
+    private:
+        std::atomic<uint64_t> _numBlocks;
+        uint64_t _maxBlocks;
+    
+    public:
+        FirstTouchAllocator(uint64_t blockSize, uint64_t maxSize):
+            //JS: Notice we are setting the canFail to true!
+            TazerAllocator(blockSize, maxSize, true),
+            _numBlocks(0),
+            _maxBlocks(maxSize / blockSize) { 
+                // PPRINTF("NUMBER OF BLOCKS: %lu\n", _maxBlocks);
+            }
+
+        uint8_t * allocateBlock(uint32_t allocateForFileIndex, bool must = false) {
+            uint64_t temp = _numBlocks.fetch_add(1);
+            if(temp < _maxBlocks)
+                return new uint8_t[_blockSize];
+            _numBlocks.fetch_sub(1);
+            return NULL;
+        }
+
+        static TazerAllocator * addFirstTouchAllocator(uint64_t blockSize, uint64_t maxSize) {
+            return addAllocator<FirstTouchAllocator>(std::string("FirstTouchAllocator"), blockSize, maxSize);
+        }
+};
+
+#endif /* SCALABLE_ALLOCATOR_H */
